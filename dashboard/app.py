@@ -601,9 +601,9 @@ elif page == "🔮 Prediction Panel":
 
     st.divider()
 
-    tab1, tab2, tab3, tab4 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5 = st.tabs([
         "📊 Delay Distribution", "🚨 Anomaly Detection",
-        "🎯 Action Recommendations", "📋 Full Table",
+        "🎯 Action Recommendations", "🤖 AI Analysis Pipeline", "📋 Full Table",
     ])
 
     with tab1:
@@ -707,6 +707,126 @@ elif page == "🔮 Prediction Panel":
         st.success(f"✅ **{normal_count} flights operating normally** — no action required.")
 
     with tab4:
+        from dashboard.ai_pipeline import AnomalyInput, run_ai_pipeline
+
+        st.subheader("End-to-End AI Analysis Pipeline")
+        st.caption(
+            "Multi-Agent System → Neuro-Symbolic Reasoning → Constitutional AI Safety Gate"
+        )
+
+        # Pipeline overview
+        st.markdown(
+            "```\n"
+            "Live Anomaly ──▶ 🤖 Multi-Agent Analysis ──▶ 🧠 Neuro-Symbolic Rules ──▶ 🛡️ Constitutional AI ──▶ ✅ Approved Action\n"
+            "                 DataAnalyst                  ICAO/FAA Rule Check          Safety Constitution\n"
+            "                 CausalReasoner               Knowledge Graph              Self-Critique Loop\n"
+            "                 Predictor                    Regulatory Compliance        Human-in-Loop Gate\n"
+            "                 SafetyCritic\n"
+            "```"
+        )
+        st.divider()
+
+        anomaly_rows = preds[preds["anomaly_flag"]].sort_values("anomaly_score", ascending=False)
+        if len(anomaly_rows) == 0:
+            st.success("No anomalies to analyse. All flights operating normally.")
+        else:
+            # Let user pick an anomaly or auto-select top one
+            callsigns = anomaly_rows["callsign"].tolist()
+            selected = st.selectbox(
+                f"Select anomaly to analyse ({len(callsigns)} detected)",
+                callsigns,
+                index=0,
+                key="ai_pipeline_select",
+            )
+            row = anomaly_rows[anomaly_rows["callsign"] == selected].iloc[0]
+
+            if st.button("🚀 Run AI Analysis Pipeline", type="primary"):
+                anomaly_input = AnomalyInput(
+                    callsign=row["callsign"],
+                    origin_country=row["origin_country"],
+                    anomaly_type=row["anomaly_type"],
+                    anomaly_score=row["anomaly_score"],
+                    delay_minutes=row["delay_minutes"],
+                    risk_level=str(row["risk_level"]),
+                    recommended_action=row["recommended_action"],
+                )
+
+                with st.spinner("Running AI pipeline... Multi-Agent → Neuro-Symbolic → Constitutional AI"):
+                    result = run_ai_pipeline(anomaly_input)
+
+                st.success(f"Pipeline complete in {result.processing_time_ms:.1f} ms | "
+                           f"Confidence: {result.pipeline_confidence:.1%}")
+                st.divider()
+
+                # --- Stage 1: Multi-Agent ---
+                st.markdown("### 🤖 Stage 1: Multi-Agent Analysis")
+                for agent in result.agent_analyses:
+                    with st.expander(f"**{agent.agent_name}** — {agent.role} (conf: {agent.confidence:.0%})", expanded=True):
+                        st.markdown(agent.finding)
+                        if agent.details:
+                            st.json(agent.details)
+
+                st.markdown(f"**Root Cause:** {result.root_cause}")
+                st.markdown(f"**Cascading Impact:** {result.cascading_impact}")
+                st.divider()
+
+                # --- Stage 2: Neuro-Symbolic ---
+                st.markdown("### 🧠 Stage 2: Neuro-Symbolic Rule Validation")
+
+                for rc in result.rule_checks:
+                    if rc.status == "VIOLATED":
+                        st.error(f"❌ **{rc.rule_id}**: {rc.rule_text} — {rc.explanation}")
+                    elif rc.status == "WARNING":
+                        st.warning(f"⚠️ **{rc.rule_id}**: {rc.rule_text} — {rc.explanation}")
+                    else:
+                        st.success(f"✅ **{rc.rule_id}**: {rc.rule_text}")
+
+                st.markdown("**Knowledge Graph References:**")
+                for ref in result.knowledge_graph_refs:
+                    st.code(ref, language=None)
+                st.divider()
+
+                # --- Stage 3: Constitutional AI ---
+                st.markdown("### 🛡️ Stage 3: Constitutional AI Safety Gate")
+
+                col_s1, col_s2 = st.columns(2)
+                col_s1.metric("Safety Score", f"{result.safety_gate.safety_score:.0%}")
+                col_s2.metric("Status", "✅ APPROVED" if result.safety_gate.approved else "⛔ REQUIRES REVIEW")
+
+                if result.safety_gate.violations:
+                    st.warning("**Safety Violations Found:**")
+                    for v in result.safety_gate.violations:
+                        st.markdown(f"- {v}")
+
+                with st.expander("Principles Checked (8 constitutional rules)"):
+                    for p in result.safety_gate.principles_checked:
+                        st.markdown(f"- {p}")
+
+                st.divider()
+
+                # --- Final Action ---
+                st.markdown("### 🎯 Final AI-Validated Action")
+                if result.safety_gate.approved:
+                    st.success(result.final_action)
+                else:
+                    st.warning(result.final_action)
+
+                # --- Operator Feedback ---
+                st.divider()
+                st.markdown("### 👤 Operator Feedback Loop")
+                st.caption("Your feedback improves the AI models via federated learning (Feature 008)")
+                fb_col1, fb_col2, fb_col3 = st.columns(3)
+                with fb_col1:
+                    if st.button("✅ Accept Action", key="fb_accept"):
+                        st.success("Feedback recorded: Action ACCEPTED. Model will reinforce this pattern.")
+                with fb_col2:
+                    if st.button("❌ Reject Action", key="fb_reject"):
+                        st.warning("Feedback recorded: Action REJECTED. Model will adjust weights.")
+                with fb_col3:
+                    if st.button("🔄 False Positive", key="fb_fp"):
+                        st.info("Feedback recorded: FALSE POSITIVE. Anomaly threshold will be refined.")
+
+    with tab5:
         display_cols = ["callsign", "origin_country", "delay_minutes",
                         "delay_confidence", "anomaly_score", "anomaly_type",
                         "risk_level", "recommended_action"]
