@@ -1,0 +1,59 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aviation-dashboard
+  namespace: aviation-intelligence
+  labels:
+    app: aviation-dashboard
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: aviation-dashboard
+  template:
+    metadata:
+      labels:
+        app: aviation-dashboard
+    spec:
+      containers:
+        - name: dashboard
+          image: aviation-intelligence-platform:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8501
+              protocol: TCP
+          env:
+            - name: PYTHONPATH
+              value: /app
+          volumeMounts:
+            - name: streamlit-secrets
+              mountPath: /app/.streamlit/secrets.toml
+              subPath: secrets.toml
+              readOnly: true
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "512Mi"
+            limits:
+              cpu: "1000m"
+              memory: "2Gi"
+          livenessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 15
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            httpGet:
+              path: /_stcore/health
+              port: 8501
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      volumes:
+        - name: streamlit-secrets
+          secret:
+            secretName: streamlit-secrets

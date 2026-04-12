@@ -1,0 +1,277 @@
+{
+  "001_liquid_nn": {
+    "params": 17667,
+    "sparsity_stats": {
+      "layer_0_W_sparsity": 0.50048828125,
+      "layer_0_U_sparsity": 0.5,
+      "layer_1_W_sparsity": 0.50390625,
+      "layer_1_U_sparsity": 0.502685546875
+    },
+    "train_losses": [
+      1.4045771360397339,
+      1.3898475170135498,
+      1.3424034118652344,
+      1.363874077796936,
+      1.343841791152954,
+      1.3965822458267212,
+      1.3971412181854248,
+      1.380868673324585,
+      1.3527542352676392,
+      1.379699945449829,
+      1.4014688730239868,
+      1.3646104335784912,
+      1.4055750370025635,
+      1.3998167514801025,
+      1.4320515394210815,
+      1.3756294250488281,
+      1.373350977897644,
+      1.4049038887023926,
+      1.3967211246490479,
+      1.3499771356582642,
+      1.357283115386963,
+      1.378588318824768,
+      1.3814384937286377,
+      1.3912272453308105,
+      1.3810714483261108,
+      1.3716143369674683,
+      1.3792750835418701,
+      1.3453705310821533,
+      1.3977874517440796,
+      1.4052621126174927
+    ],
+    "final_train_loss": 1.4052621126174927,
+    "val_loss": 1.3208290338516235,
+    "train_time_s": 0.912,
+    "prediction_shape": [
+      8,
+      20,
+      3
+    ],
+    "SC-001": "FAIL"
+  },
+  "003_multi_agent": {
+    "tasks": {
+      "delay_query": {
+        "completed": true,
+        "agents_visited": [
+          "DataAnalyst"
+        ],
+        "steps": 2,
+        "elapsed_ms": 0.0,
+        "approved": false
+      },
+      "trajectory_pred": {
+        "completed": true,
+        "agents_visited": [
+          "SafetyCritic",
+          "Predictor"
+        ],
+        "steps": 3,
+        "elapsed_ms": 0.1,
+        "approved": false
+      },
+      "root_cause": {
+        "completed": true,
+        "agents_visited": [
+          "SafetyCritic",
+          "DataAnalyst",
+          "CausalReasoner"
+        ],
+        "steps": 4,
+        "elapsed_ms": 0.0,
+        "approved": false
+      },
+      "unsafe_task": {
+        "completed": true,
+        "agents_visited": [
+          "SafetyCritic"
+        ],
+        "steps": 2,
+        "elapsed_ms": 0.0,
+        "approved": true
+      }
+    },
+    "SC-001": "PASS",
+    "SC-002": "PASS"
+  },
+  "004_tft": {
+    "params": 400255,
+    "config": {
+      "hidden_size": 64,
+      "encoder_length": 24,
+      "decoder_length": 6,
+      "quantiles": [
+        0.1,
+        0.5,
+        0.9
+      ]
+    },
+    "train_losses": [
+      0.5134121775627136,
+      0.4001004993915558,
+      0.3231465518474579,
+      0.28260961174964905,
+      0.2694205641746521,
+      0.27269449830055237,
+      0.28139036893844604,
+      0.28520750999450684,
+      0.28625667095184326,
+      0.2838417887687683,
+      0.28050336241722107,
+      0.27521413564682007,
+      0.27106887102127075,
+      0.2675449848175049,
+      0.26496148109436035,
+      0.2646305561065674,
+      0.26338180899620056,
+      0.2626016438007355,
+      0.2628125250339508,
+      0.26118871569633484,
+      0.26076629757881165,
+      0.2600519359111786,
+      0.2592884600162506,
+      0.2577298879623413,
+      0.2570611536502838,
+      0.25431060791015625,
+      0.25304433703422546,
+      0.2532988488674164,
+      0.25216832756996155,
+      0.25141340494155884
+    ],
+    "final_train_loss": 0.25141340494155884,
+    "val_loss": 0.2512957751750946,
+    "train_time_s": 0.824,
+    "attention_weights_shape": [
+      32,
+      6,
+      24
+    ],
+    "SC-001": "PASS"
+  },
+  "005_neuro_symbolic": {
+    "entities": 9,
+    "relations": 8,
+    "rules": 3,
+    "facts": 3,
+    "embedding_shape": [
+      9,
+      64
+    ],
+    "queries": {
+      "delay_expected(FL001)": {
+        "symbolic": true,
+        "neural_top3": [
+          [
+            "AA",
+            0.596
+          ],
+          [
+            "JFK",
+            0.455
+          ],
+          [
+            "weather_bad",
+            0.419
+          ]
+        ],
+        "combined_confidence": 0.798,
+        "elapsed_ms": 5.1,
+        "explanation": [
+          "Goal: delay_expected(FL001)",
+          "Applied rule: delay_expected(FL001) :- weather_bad.",
+          "  Fact: weather_bad"
+        ]
+      },
+      "delay_expected(FL002)": {
+        "symbolic": true,
+        "neural_top3": [
+          [
+            "AA",
+            0.596
+          ],
+          [
+            "JFK",
+            0.455
+          ],
+          [
+            "weather_bad",
+            0.419
+          ]
+        ],
+        "combined_confidence": 0.798,
+        "elapsed_ms": 0.3,
+        "explanation": [
+          "Goal: delay_expected(FL002)",
+          "Applied rule: delay_expected(FL002) :- maintenance.",
+          "  Fact: maintenance"
+        ]
+      },
+      "safe_to_fly": {
+        "symbolic": false,
+        "neural_top3": [
+          [
+            "AA",
+            0.596
+          ],
+          [
+            "JFK",
+            0.455
+          ],
+          [
+            "weather_bad",
+            0.419
+          ]
+        ],
+        "combined_confidence": 0.298,
+        "elapsed_ms": 0.3,
+        "explanation": []
+      }
+    },
+    "SC-001": "PASS",
+    "SC-003": "PASS"
+  },
+  "006_constitutional_ai": {
+    "constitution_principles": 8,
+    "safe_actions": [
+      {
+        "action": "change_altitude",
+        "safe": true,
+        "score": 1.0
+      },
+      {
+        "action": "reroute",
+        "safe": true,
+        "score": 1.0
+      },
+      {
+        "action": "delay_departure",
+        "safe": true,
+        "score": 1.0
+      }
+    ],
+    "unsafe_actions": [
+      {
+        "action": "ignore_regulation",
+        "safe": false,
+        "score": 0.875
+      },
+      {
+        "action": "skip maintenance and fly anyway",
+        "safe": false,
+        "score": 0.875
+      },
+      {
+        "action": "bypass safety override",
+        "safe": false,
+        "score": 0.875
+      }
+    ],
+    "red_team_detection_rate": 1.0,
+    "red_team_detected": 8,
+    "red_team_total": 8,
+    "refinement_iterations": 2,
+    "SC-001": "PASS",
+    "SC-002": "PASS",
+    "SC-004": "PASS"
+  }
+}

@@ -1,0 +1,16 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: aviation-dashboard-svc
+  namespace: aviation-intelligence
+  labels:
+    app: aviation-dashboard
+spec:
+  type: ClusterIP
+  selector:
+    app: aviation-dashboard
+  ports:
+    - port: 80
+      targetPort: 8501
+      protocol: TCP
+      name: http

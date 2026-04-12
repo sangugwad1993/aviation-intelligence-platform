@@ -1,0 +1,22 @@
+# Aviation Intelligence Platform — Python Dependencies
+# For Docker container build
+
+# Core ML
+torch>=2.0.0
+opacus>=1.4.0
+
+# Dashboard
+streamlit>=1.30.0,<1.40.0
+folium>=0.15.0
+streamlit-folium>=0.22.0
+plotly>=5.18.0
+
+# Data & HTTP
+pandas>=2.0.0
+numpy>=1.24.0
+requests>=2.31.0
+networkx>=3.0
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=4.0.0

@@ -1,0 +1,125 @@
+[tool.poetry]
+name = "aviation-intelligence-platform"
+version = "1.0.0"
+description = "Self-evolving aviation intelligence system with cutting-edge AI/ML"
+authors = ["Your Name <your.email@example.com>"]
+readme = "README.md"
+license = "MIT"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+
+# Core frameworks
+torch = "^2.1.0"
+pytorch-lightning = "^2.1.0"
+transformers = "^4.36.0"
+
+# Advanced AI/ML (99% don't know these)
+torchdiffeq = "^0.2.3"  # For Liquid Neural Networks (Neural ODEs)
+dowhy = "^0.11"  # Causal inference with do-calculus
+econml = "^0.15.0"  # Causal ML from Microsoft
+causalnex = "^0.12.0"  # Bayesian networks for causality
+pytorch-forecasting = "^1.0.0"  # Temporal Fusion Transformers
+
+# Multi-agent systems
+langgraph = "^0.0.20"  # LangChain's agent orchestration
+autogen = "^0.2.0"  # Microsoft's multi-agent framework
+crewai = "^0.1.0"  # Agent collaboration framework
+
+# Federated Learning
+flwr = "1.7.0"  # Flower federated learning
+opacus = "^1.4.0"  # Meta's differential privacy for PyTorch
+ray = {extras = ["default"], version = "^2.6.3"}  # Distributed compute for FL simulation
+syft = "^0.8.0"  # PySyft for privacy-preserving ML
+
+# Data engineering
+kafka-python = "^2.0.2"
+delta-spark = "^2.4.0"
+duckdb = "^0.9.0"
+polars = "^0.19.0"
+great-expectations = "^0.18.0"
+
+# API & Web
+fastapi = "^0.104.0"
+uvicorn = {extras = ["standard"], version = "^0.24.0"}
+pydantic = "^2.5.0"
+httpx = "^0.25.0"
+
+# MLOps
+mlflow = "^2.8.0"
+wandb = "^0.16.0"
+bentoml = "^1.1.0"
+evidently = "^0.4.0"
+
+# Monitoring & Observability
+prometheus-client = "^0.19.0"
+opentelemetry-api = "^1.21.0"
+opentelemetry-sdk = "^1.21.0"
+structlog = "^23.2.0"
+
+# Security
+hvac = "^2.0.0"  # HashiCorp Vault client
+cryptography = "^41.0.0"
+
+# Utilities
+tenacity = "^8.2.0"
+python-dotenv = "^1.0.0"
+typer = "^0.9.0"
+rich = "^13.7.0"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^7.4.0"
+pytest-cov = "^4.1.0"
+pytest-asyncio = "^0.21.0"
+pytest-mock = "^3.12.0"
+black = "^23.11.0"
+ruff = "^0.1.6"
+mypy = "^1.7.0"
+pre-commit = "^3.5.0"
+ipython = "^8.17.0"
+jupyter = "^1.0.0"
+
+[tool.black]
+line-length = 100
+target-version = ['py311']
+include = '\.pyi?$'
+
+[tool.ruff]
+line-length = 100
+select = ["E", "F", "I", "N", "W", "UP", "B", "A", "C4", "PT", "SIM"]
+ignore = ["E501"]
+target-version = "py311"
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true
+disallow_any_generics = true
+check_untyped_defs = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = "-v --cov=src --cov-report=html --cov-report=term-missing"
+
+[tool.coverage.run]
+source = ["src"]
+omit = ["*/tests/*", "*/test_*.py"]
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"

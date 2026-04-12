@@ -1,0 +1,14 @@
+# Aviation Intelligence Platform — Dashboard Dependencies
+# This file is used by Streamlit Community Cloud (lightweight, no torch)
+# For full development/Docker deps, see requirements-dev.txt
+
+# Dashboard
+streamlit>=1.30.0,<1.40.0
+folium>=0.15.0
+streamlit-folium>=0.22.0
+plotly>=5.18.0
+
+# Data & HTTP
+pandas>=2.0.0
+numpy>=1.24.0
+requests>=2.31.0

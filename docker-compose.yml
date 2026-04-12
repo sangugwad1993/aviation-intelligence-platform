@@ -1,0 +1,66 @@
+# ============================================================================
+# Aviation Intelligence Platform — Docker Compose
+# Usage:
+#   docker compose up --build                   → Start dashboard on port 8501
+#   docker compose run --rm test                → Run all 192 tests
+#   docker compose run --rm experiments         → Run all-module experiments
+#   docker compose --profile test up            → Start dashboard + run tests
+# ============================================================================
+
+services:
+  # Main Dashboard (with authentication via mounted secrets)
+  dashboard:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aviation-intelligence-platform:latest
+    container_name: aviation-dashboard
+    ports:
+      - "8501:8501"
+    environment:
+      - PYTHONPATH=/app
+    volumes:
+      - ./.streamlit/secrets.toml:/app/.streamlit/secrets.toml:ro
+    networks:
+      - aviation-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8501/_stcore/health"]
+      interval: 30s
+      timeout: 10s
+      start_period: 15s
+      retries: 3
+
+  # Test runner — all 192 tests (one-shot)
+  test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aviation-tests
+    environment:
+      - PYTHONPATH=/app
+    entrypoint: ["python", "-m", "pytest", "tests/", "-v", "--no-header", "--no-cov"]
+    networks:
+      - aviation-network
+    profiles:
+      - test
+
+  # Experiment runner — all modules (one-shot)
+  experiments:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: aviation-experiments
+    environment:
+      - PYTHONPATH=/app
+    entrypoint: ["python", "scripts/run_all_experiments.py"]
+    volumes:
+      - ./artifacts:/app/artifacts
+    networks:
+      - aviation-network
+    profiles:
+      - experiments
+
+networks:
+  aviation-network:
+    driver: bridge
