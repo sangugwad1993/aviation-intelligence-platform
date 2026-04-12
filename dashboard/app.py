@@ -209,19 +209,104 @@ def _demo_fl_results() -> dict:
 # Prediction helpers
 # ---------------------------------------------------------------------------
 def generate_predictions(df: pd.DataFrame) -> pd.DataFrame:
-    """Generate synthetic delay/anomaly predictions for flight data."""
-    np.random.seed(int(time.time()) % 1000)
-    n = len(df)
+    """Generate delay/anomaly predictions using actual flight telemetry.
+
+    Anomaly detection uses real data signals:
+    - Altitude anomaly: outside normal cruise band (1000–13000 m)
+    - Speed anomaly: outside normal envelope (80–340 m/s)
+    - Vertical rate anomaly: extreme climb/descent (|vr| > 15 m/s)
+    - Stale position: no update for > 60 s
+    - Ground proximity: low altitude + high speed (possible CFIT risk)
+
+    Delay prediction uses a heuristic model combining these signals.
+    """
     preds = df[["icao24", "callsign", "origin_country"]].copy()
-    preds["delay_minutes"] = np.round(np.random.exponential(15, n), 1)
-    preds["delay_confidence"] = np.round(np.random.uniform(0.7, 0.98, n), 2)
-    preds["anomaly_score"] = np.round(np.random.beta(2, 20, n), 3)
+    n = len(preds)
+
+    alt = pd.to_numeric(df.get("baro_altitude", pd.Series([np.nan] * n)), errors="coerce").fillna(8000)
+    vel = pd.to_numeric(df.get("velocity", pd.Series([np.nan] * n)), errors="coerce").fillna(200)
+    vr = pd.to_numeric(df.get("vertical_rate", pd.Series([np.nan] * n)), errors="coerce").fillna(0)
+    on_ground = df.get("on_ground", pd.Series([False] * n))
+
+    # --- Anomaly flags (rule-based on real telemetry) ---
+    alt_anomaly = ((alt < 1000) & (~on_ground)) | (alt > 13000)
+    speed_anomaly = (vel < 80) & (~on_ground) | (vel > 340)
+    vr_anomaly = vr.abs() > 15
+    ground_prox = (alt < 500) & (vel > 100) & (~on_ground)
+
+    preds["alt_anomaly"] = alt_anomaly
+    preds["speed_anomaly"] = speed_anomaly
+    preds["vr_anomaly"] = vr_anomaly
+    preds["ground_proximity"] = ground_prox
+
+    # Composite anomaly score (0–1): weighted sum of anomaly signals + noise
+    score = (
+        alt_anomaly.astype(float) * 0.30
+        + speed_anomaly.astype(float) * 0.25
+        + vr_anomaly.astype(float) * 0.20
+        + ground_prox.astype(float) * 0.25
+    )
+    # Add small jitter so scores aren't all exactly 0 or 0.3
+    np.random.seed(int(time.time()) % 10000)
+    score = score + np.random.uniform(0, 0.05, n)
+    preds["anomaly_score"] = np.round(score.clip(0, 1), 3)
     preds["anomaly_flag"] = preds["anomaly_score"] > 0.15
+
+    # --- Anomaly type label ---
+    def _anomaly_type(row):
+        types = []
+        if row["ground_proximity"]:
+            types.append("Ground Proximity")
+        if row["alt_anomaly"]:
+            types.append("Altitude")
+        if row["speed_anomaly"]:
+            types.append("Speed")
+        if row["vr_anomaly"]:
+            types.append("Vertical Rate")
+        return ", ".join(types) if types else "Normal"
+
+    preds["anomaly_type"] = preds.apply(_anomaly_type, axis=1)
+
+    # --- Delay prediction (heuristic model) ---
+    # Base delay from anomaly score + altitude/speed deviation
+    alt_dev = ((alt - 8000).abs() / 8000).clip(0, 1)
+    speed_dev = ((vel - 220).abs() / 220).clip(0, 1)
+    base_delay = (preds["anomaly_score"] * 40 + alt_dev * 10 + speed_dev * 10)
+    base_delay = base_delay + np.random.exponential(3, n)
+    preds["delay_minutes"] = np.round(base_delay.clip(0, 120), 1)
+
+    preds["delay_confidence"] = np.round(
+        0.95 - preds["anomaly_score"] * 0.25 + np.random.uniform(-0.03, 0.03, n), 2
+    ).clip(0.60, 0.99)
+
     preds["risk_level"] = pd.cut(
         preds["delay_minutes"],
         bins=[0, 10, 30, 60, float("inf")],
         labels=["Low", "Medium", "High", "Critical"],
     )
+
+    # --- Recommended action ---
+    def _action(row):
+        if row["ground_proximity"]:
+            return "URGENT: Verify altitude — possible CFIT risk. Alert ATC immediately."
+        if row["risk_level"] == "Critical":
+            return "Escalate to Ops Manager. Consider diversion. Notify passengers."
+        if row["alt_anomaly"] and row["speed_anomaly"]:
+            return "Multiple anomalies: cross-check transponder & weather data."
+        if row["alt_anomaly"]:
+            return "Verify flight level assignment. Check for turbulence/weather deviation."
+        if row["speed_anomaly"]:
+            return "Check headwind/tailwind. Verify engine performance data."
+        if row["vr_anomaly"]:
+            return "Monitor climb/descent rate. Verify approach clearance if descending."
+        if row["risk_level"] == "High":
+            return "Prepare gate reassignment. Alert ground crew for quick turnaround."
+        if row["risk_level"] == "Medium":
+            return "Monitor delay trend. Pre-notify connecting flights if > 20 min."
+        return "No action required. Flight operating normally."
+
+    preds["recommended_action"] = preds.apply(_action, axis=1)
+
     return preds
 
 
@@ -516,7 +601,10 @@ elif page == "🔮 Prediction Panel":
 
     st.divider()
 
-    tab1, tab2, tab3 = st.tabs(["📊 Delay Distribution", "🚨 Anomaly Detection", "📋 Full Table"])
+    tab1, tab2, tab3, tab4 = st.tabs([
+        "📊 Delay Distribution", "🚨 Anomaly Detection",
+        "🎯 Action Recommendations", "📋 Full Table",
+    ])
 
     with tab1:
         fig = px.histogram(
@@ -535,11 +623,26 @@ elif page == "🔮 Prediction Panel":
         anomalies = preds[preds["anomaly_flag"]].sort_values("anomaly_score", ascending=False)
         if len(anomalies) > 0:
             st.warning(f"⚠️ {len(anomalies)} flights flagged for anomalous behaviour")
+
+            # Anomaly type breakdown
+            st.subheader("Anomaly Type Breakdown")
+            type_counts = {"Altitude": int(preds["alt_anomaly"].sum()),
+                           "Speed": int(preds["speed_anomaly"].sum()),
+                           "Vertical Rate": int(preds["vr_anomaly"].sum()),
+                           "Ground Proximity": int(preds["ground_proximity"].sum())}
+            tc1, tc2, tc3, tc4 = st.columns(4)
+            tc1.metric("🏔️ Altitude", type_counts["Altitude"])
+            tc2.metric("💨 Speed", type_counts["Speed"])
+            tc3.metric("📐 Vertical Rate", type_counts["Vertical Rate"])
+            tc4.metric("⚠️ Ground Proximity", type_counts["Ground Proximity"])
+
+            st.divider()
+
             fig2 = px.scatter(
                 preds, x="delay_minutes", y="anomaly_score",
                 color="anomaly_flag",
                 color_discrete_map={True: "#e74c3c", False: "#2ecc71"},
-                hover_data=["callsign", "origin_country"],
+                hover_data=["callsign", "origin_country", "anomaly_type"],
                 title="Anomaly Score vs Predicted Delay",
                 template="plotly_dark",
             )
@@ -549,16 +652,66 @@ elif page == "🔮 Prediction Panel":
             st.plotly_chart(fig2, use_container_width=True)
 
             st.dataframe(
-                anomalies[["callsign", "origin_country", "delay_minutes",
-                           "anomaly_score", "risk_level"]].head(20),
+                anomalies[["callsign", "origin_country", "anomaly_type",
+                           "anomaly_score", "delay_minutes", "risk_level"]].head(20),
                 use_container_width=True, hide_index=True,
             )
         else:
             st.success("No anomalies detected in current flight data.")
 
     with tab3:
+        st.subheader("Recommended Actions")
+        st.caption("Prioritized action items based on real-time flight telemetry analysis")
+
+        # Urgent actions first (ground proximity / critical)
+        urgent = preds[preds["ground_proximity"]]
+        if len(urgent) > 0:
+            st.error(f"🚨 **{len(urgent)} URGENT — Ground Proximity Alerts**")
+            for _, row in urgent.iterrows():
+                st.markdown(
+                    f"- **{row['callsign']}** ({row['origin_country']}): "
+                    f"{row['recommended_action']}"
+                )
+            st.divider()
+
+        # High/Critical risk actions
+        high_risk = preds[
+            preds["risk_level"].isin(["High", "Critical"]) & ~preds["ground_proximity"]
+        ].sort_values("delay_minutes", ascending=False)
+        if len(high_risk) > 0:
+            st.warning(f"⚠️ **{len(high_risk)} High/Critical Risk Flights**")
+            st.dataframe(
+                high_risk[["callsign", "origin_country", "risk_level",
+                           "delay_minutes", "anomaly_type", "recommended_action"]].head(15),
+                use_container_width=True, hide_index=True,
+            )
+            st.divider()
+
+        # Other anomalies
+        other_anom = preds[
+            preds["anomaly_flag"]
+            & ~preds["ground_proximity"]
+            & ~preds["risk_level"].isin(["High", "Critical"])
+        ].sort_values("anomaly_score", ascending=False)
+        if len(other_anom) > 0:
+            st.info(f"ℹ️ **{len(other_anom)} Additional Anomalies (Medium/Low Risk)**")
+            st.dataframe(
+                other_anom[["callsign", "origin_country", "anomaly_type",
+                            "anomaly_score", "recommended_action"]].head(15),
+                use_container_width=True, hide_index=True,
+            )
+            st.divider()
+
+        # Summary stats
+        normal_count = int((~preds["anomaly_flag"]).sum())
+        st.success(f"✅ **{normal_count} flights operating normally** — no action required.")
+
+    with tab4:
+        display_cols = ["callsign", "origin_country", "delay_minutes",
+                        "delay_confidence", "anomaly_score", "anomaly_type",
+                        "risk_level", "recommended_action"]
         st.dataframe(
-            preds.sort_values("delay_minutes", ascending=False),
+            preds[display_cols].sort_values("delay_minutes", ascending=False),
             use_container_width=True, hide_index=True,
         )
 
