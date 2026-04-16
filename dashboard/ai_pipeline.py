@@ -32,6 +32,8 @@ class AnomalyInput:
     delay_minutes: float
     risk_level: str
     recommended_action: str
+    # flight phase (inferred from telemetry)
+    flight_phase: str = "Cruise"
     # raw telemetry (optional)
     altitude: float = 0.0
     velocity: float = 0.0
@@ -146,11 +148,14 @@ def _run_multi_agent_analysis(anomaly: AnomalyInput) -> tuple:
         agent_name="DataAnalyst",
         role="Flight data analysis & pattern recognition",
         finding=f"Flight {anomaly.callsign} shows {primary_type.lower()} anomaly "
+                f"during **{anomaly.flight_phase}** phase "
                 f"(score: {anomaly.anomaly_score:.3f}). "
                 f"Origin: {anomaly.origin_country}. "
-                f"Current delay estimate: {anomaly.delay_minutes:.0f} min.",
+                f"Current delay estimate: {anomaly.delay_minutes:.0f} min. "
+                f"Phase-aware detection confirms this is {'expected' if anomaly.flight_phase in ('Approach', 'Landing') and primary_type in ('Altitude', 'Speed') else 'anomalous'} "
+                f"for the {anomaly.flight_phase} phase.",
         confidence=0.92,
-        details={"anomaly_type": primary_type, "score": anomaly.anomaly_score},
+        details={"anomaly_type": primary_type, "score": anomaly.anomaly_score, "flight_phase": anomaly.flight_phase},
     ))
 
     # --- CausalReasoner Agent ---

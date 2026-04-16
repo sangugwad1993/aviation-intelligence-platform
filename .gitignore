@@ -2,6 +2,8 @@
 .streamlit/secrets.toml
 data/users.json
 data/sessions.json
+data/anomaly_log.json
+data/adaptive_thresholds.json
 
 # Python
 __pycache__/

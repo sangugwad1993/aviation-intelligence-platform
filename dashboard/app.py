@@ -208,17 +208,60 @@ def _demo_fl_results() -> dict:
 # ---------------------------------------------------------------------------
 # Prediction helpers
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Flight Phase Detection — Gap 3 fix
+# ---------------------------------------------------------------------------
+# Phase-specific thresholds: (alt_min, alt_max, vel_min, vel_max, vr_limit)
+_PHASE_THRESHOLDS = {
+    "Ground":    {"alt_min": -50, "alt_max": 100,   "vel_min": 0,   "vel_max": 80,  "vr_limit": 2},
+    "Takeoff":   {"alt_min": 0,   "alt_max": 3000,  "vel_min": 40,  "vel_max": 180, "vr_limit": 20},
+    "Climb":     {"alt_min": 1000,"alt_max": 10000, "vel_min": 80,  "vel_max": 300, "vr_limit": 20},
+    "Cruise":    {"alt_min": 6000,"alt_max": 13000, "vel_min": 180, "vel_max": 340, "vr_limit": 5},
+    "Descent":   {"alt_min": 1000,"alt_max": 10000, "vel_min": 80,  "vel_max": 300, "vr_limit": 20},
+    "Approach":  {"alt_min": 100, "alt_max": 3000,  "vel_min": 50,  "vel_max": 130, "vr_limit": 10},
+    "Landing":   {"alt_min": 0,   "alt_max": 500,   "vel_min": 30,  "vel_max": 90,  "vr_limit": 5},
+}
+
+
+def _infer_flight_phase(alt: float, vel: float, vr: float, on_ground: bool) -> str:
+    """Infer flight phase from telemetry — eliminates false positives."""
+    if on_ground:
+        return "Ground"
+    if alt < 500 and vel < 90 and vr < -1:
+        return "Landing"
+    if alt < 3000 and vr < -2:
+        return "Approach"
+    if alt < 3000 and vr > 3:
+        return "Takeoff"
+    if vr > 2 and alt < 10000:
+        return "Climb"
+    if vr < -2 and alt < 10000:
+        return "Descent"
+    if alt > 6000:
+        return "Cruise"
+    return "Cruise"
+
+
+def _load_adaptive_thresholds() -> dict:
+    """Load operator-feedback-adjusted thresholds (Gap 5: closed loop)."""
+    threshold_file = Path(__file__).resolve().parent.parent / "data" / "adaptive_thresholds.json"
+    if threshold_file.exists():
+        try:
+            with open(threshold_file) as f:
+                return json.load(f)
+        except Exception:
+            pass
+    return {}
+
+
 def generate_predictions(df: pd.DataFrame) -> pd.DataFrame:
-    """Generate delay/anomaly predictions using actual flight telemetry.
+    """Generate delay/anomaly predictions using flight-phase-aware detection.
 
-    Anomaly detection uses real data signals:
-    - Altitude anomaly: outside normal cruise band (1000–13000 m)
-    - Speed anomaly: outside normal envelope (80–340 m/s)
-    - Vertical rate anomaly: extreme climb/descent (|vr| > 15 m/s)
-    - Stale position: no update for > 60 s
-    - Ground proximity: low altitude + high speed (possible CFIT risk)
-
-    Delay prediction uses a heuristic model combining these signals.
+    Pipeline:
+    1. Infer flight phase from telemetry (Ground/Takeoff/Climb/Cruise/Descent/Approach/Landing)
+    2. Apply phase-specific anomaly thresholds (not one-size-fits-all)
+    3. Adjust thresholds using operator feedback (adaptive closed loop)
+    4. Generate dispatcher-specific recommended actions
     """
     preds = df[["icao24", "callsign", "origin_country"]].copy()
     n = len(preds)
@@ -228,25 +271,57 @@ def generate_predictions(df: pd.DataFrame) -> pd.DataFrame:
     vr = pd.to_numeric(df.get("vertical_rate", pd.Series([np.nan] * n)), errors="coerce").fillna(0)
     on_ground = df.get("on_ground", pd.Series([False] * n))
 
-    # --- Anomaly flags (rule-based on real telemetry) ---
-    alt_anomaly = ((alt < 1000) & (~on_ground)) | (alt > 13000)
-    speed_anomaly = (vel < 80) & (~on_ground) | (vel > 340)
-    vr_anomaly = vr.abs() > 15
-    ground_prox = (alt < 500) & (vel > 100) & (~on_ground)
+    # --- Step 1: Infer flight phase per aircraft ---
+    phases = []
+    for i in range(n):
+        phases.append(_infer_flight_phase(
+            float(alt.iloc[i]), float(vel.iloc[i]),
+            float(vr.iloc[i]), bool(on_ground.iloc[i]),
+        ))
+    preds["flight_phase"] = phases
 
-    preds["alt_anomaly"] = alt_anomaly
-    preds["speed_anomaly"] = speed_anomaly
-    preds["vr_anomaly"] = vr_anomaly
-    preds["ground_proximity"] = ground_prox
+    # --- Step 2: Load adaptive thresholds from feedback ---
+    adaptive = _load_adaptive_thresholds()
 
-    # Composite anomaly score (0–1): weighted sum of anomaly signals + noise
+    # --- Step 3: Phase-aware anomaly detection ---
+    alt_flags, speed_flags, vr_flags, gp_flags = [], [], [], []
+    for i in range(n):
+        phase = phases[i]
+        th = _PHASE_THRESHOLDS[phase]
+
+        # Apply adaptive adjustments if available
+        adj = adaptive.get(phase, {})
+        a_min = th["alt_min"] * (1 - adj.get("alt_sensitivity", 0))
+        a_max = th["alt_max"] * (1 + adj.get("alt_sensitivity", 0))
+        v_min = th["vel_min"] * (1 - adj.get("vel_sensitivity", 0))
+        v_max = th["vel_max"] * (1 + adj.get("vel_sensitivity", 0))
+        vr_lim = th["vr_limit"] * (1 + adj.get("vr_sensitivity", 0))
+
+        a = float(alt.iloc[i])
+        v = float(vel.iloc[i])
+        r = float(vr.iloc[i])
+        og = bool(on_ground.iloc[i])
+
+        alt_flags.append(not og and (a < a_min or a > a_max))
+        speed_flags.append(not og and (v < v_min or v > v_max))
+        vr_flags.append(abs(r) > vr_lim)
+        # Ground proximity: only in Cruise/Climb (NOT Approach/Landing/Takeoff)
+        gp_flags.append(
+            phase in ("Cruise", "Climb") and a < 500 and v > 100 and not og
+        )
+
+    preds["alt_anomaly"] = alt_flags
+    preds["speed_anomaly"] = speed_flags
+    preds["vr_anomaly"] = vr_flags
+    preds["ground_proximity"] = gp_flags
+
+    # Composite anomaly score (0–1)
     score = (
-        alt_anomaly.astype(float) * 0.30
-        + speed_anomaly.astype(float) * 0.25
-        + vr_anomaly.astype(float) * 0.20
-        + ground_prox.astype(float) * 0.25
+        preds["alt_anomaly"].astype(float) * 0.30
+        + preds["speed_anomaly"].astype(float) * 0.25
+        + preds["vr_anomaly"].astype(float) * 0.20
+        + preds["ground_proximity"].astype(float) * 0.25
     )
-    # Add small jitter so scores aren't all exactly 0 or 0.3
     np.random.seed(int(time.time()) % 10000)
     score = score + np.random.uniform(0, 0.05, n)
     preds["anomaly_score"] = np.round(score.clip(0, 1), 3)
@@ -268,7 +343,6 @@ def generate_predictions(df: pd.DataFrame) -> pd.DataFrame:
     preds["anomaly_type"] = preds.apply(_anomaly_type, axis=1)
 
     # --- Delay prediction (heuristic model) ---
-    # Base delay from anomaly score + altitude/speed deviation
     alt_dev = ((alt - 8000).abs() / 8000).clip(0, 1)
     speed_dev = ((vel - 220).abs() / 220).clip(0, 1)
     base_delay = (preds["anomaly_score"] * 40 + alt_dev * 10 + speed_dev * 10)
@@ -285,25 +359,43 @@ def generate_predictions(df: pd.DataFrame) -> pd.DataFrame:
         labels=["Low", "Medium", "High", "Critical"],
     )
 
-    # --- Recommended action ---
+    # --- Dispatcher-specific recommended actions (Gap 1: persona) ---
     def _action(row):
+        phase = row["flight_phase"]
         if row["ground_proximity"]:
-            return "URGENT: Verify altitude — possible CFIT risk. Alert ATC immediately."
+            return ("URGENT: Contact crew on ACARS — request immediate position report. "
+                    "Notify duty manager. If no response in 2 min, alert ATC supervisor.")
         if row["risk_level"] == "Critical":
-            return "Escalate to Ops Manager. Consider diversion. Notify passengers."
+            return ("Escalate to Ops Manager. Initiate diversion assessment. "
+                    "Push PAX re-accommodation to DCS. Notify ground handler at alternate.")
         if row["alt_anomaly"] and row["speed_anomaly"]:
-            return "Multiple anomalies: cross-check transponder & weather data."
+            return (f"Multiple anomalies in {phase} phase. Cross-ref METAR/TAF for route. "
+                    "Request crew PIREP via ACARS. Log in OCC event tracker.")
         if row["alt_anomaly"]:
-            return "Verify flight level assignment. Check for turbulence/weather deviation."
+            if phase in ("Approach", "Landing"):
+                return (f"Altitude deviation during {phase} — likely normal. "
+                        "Monitor EGPWS status. No action unless crew reports.")
+            return (f"Altitude deviation in {phase} phase. Cross-ref with ATC flow "
+                    "restrictions. Check SIGMET/AIRMET for turbulence on route.")
         if row["speed_anomaly"]:
-            return "Check headwind/tailwind. Verify engine performance data."
+            if phase in ("Approach", "Landing"):
+                return (f"Speed variance during {phase} — expected during deceleration. "
+                        "Monitor for go-around. Pre-alert gate if delay > 5 min.")
+            return ("Cross-ref METAR for headwind/tailwind. If deviation > 20%, "
+                    "log fuel burn variance. Alert crew if fuel reserve < 30 min.")
         if row["vr_anomaly"]:
-            return "Monitor climb/descent rate. Verify approach clearance if descending."
+            if phase in ("Takeoff", "Climb"):
+                return (f"High climb rate during {phase} — likely normal departure. "
+                        "Monitor only if sustained > 5 min.")
+            return ("Abnormal vertical rate. Verify approach clearance. "
+                    "Cross-check with ATC descent assignment. Log event.")
         if row["risk_level"] == "High":
-            return "Prepare gate reassignment. Alert ground crew for quick turnaround."
+            return ("Trigger gate swap in GOS. Notify ground handler for quick turn. "
+                    "Pre-notify connecting PAX if delay > 30 min.")
         if row["risk_level"] == "Medium":
-            return "Monitor delay trend. Pre-notify connecting flights if > 20 min."
-        return "No action required. Flight operating normally."
+            return ("Monitor delay trend. Pre-notify connecting flights if > 20 min. "
+                    "Check crew duty time remaining.")
+        return f"No action required. {phase} phase — flight operating normally."
 
     preds["recommended_action"] = preds.apply(_action, axis=1)
 
@@ -593,17 +685,22 @@ elif page == "🔮 Prediction Panel":
     preds = generate_predictions(df)
 
     # Summary
-    col1, col2, col3, col4 = st.columns(4)
+    col1, col2, col3, col4, col5 = st.columns(5)
     col1.metric("Flights Analysed", len(preds))
     col2.metric("Avg Predicted Delay", f"{preds['delay_minutes'].mean():.1f} min")
     col3.metric("Anomalies Detected", int(preds["anomaly_flag"].sum()))
     col4.metric("High Risk Flights", int((preds["risk_level"].isin(["High", "Critical"])).sum()))
+    # Flight phase distribution
+    phase_counts = preds["flight_phase"].value_counts()
+    top_phase = phase_counts.index[0] if len(phase_counts) > 0 else "N/A"
+    col5.metric("Top Phase", f"{top_phase} ({phase_counts.iloc[0] if len(phase_counts) > 0 else 0})")
 
     st.divider()
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs([
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs([
         "📊 Delay Distribution", "🚨 Anomaly Detection",
-        "🎯 Action Recommendations", "🤖 AI Analysis Pipeline", "📋 Full Table",
+        "🎯 Action Recommendations", "🤖 AI Analysis Pipeline",
+        "📈 Audit Trail & Learning", "📋 Full Table",
     ])
 
     with tab1:
@@ -638,12 +735,27 @@ elif page == "🔮 Prediction Panel":
 
             st.divider()
 
+            # Flight phase distribution of anomalies
+            st.subheader("Anomalies by Flight Phase")
+            anom_phase = anomalies["flight_phase"].value_counts()
+            fig_phase = px.bar(
+                x=anom_phase.index, y=anom_phase.values,
+                labels={"x": "Flight Phase", "y": "Anomaly Count"},
+                title="Which flight phases produce anomalies?",
+                color=anom_phase.index,
+                template="plotly_dark",
+            )
+            fig_phase.update_layout(height=300, showlegend=False)
+            st.plotly_chart(fig_phase, use_container_width=True)
+
+            st.divider()
+
             fig2 = px.scatter(
                 preds, x="delay_minutes", y="anomaly_score",
-                color="anomaly_flag",
-                color_discrete_map={True: "#e74c3c", False: "#2ecc71"},
+                color="flight_phase",
+                symbol="anomaly_flag",
                 hover_data=["callsign", "origin_country", "anomaly_type"],
-                title="Anomaly Score vs Predicted Delay",
+                title="Anomaly Score vs Predicted Delay (coloured by Flight Phase)",
                 template="plotly_dark",
             )
             fig2.add_hline(y=0.15, line_dash="dash", line_color="yellow",
@@ -652,8 +764,9 @@ elif page == "🔮 Prediction Panel":
             st.plotly_chart(fig2, use_container_width=True)
 
             st.dataframe(
-                anomalies[["callsign", "origin_country", "anomaly_type",
-                           "anomaly_score", "delay_minutes", "risk_level"]].head(20),
+                anomalies[["callsign", "origin_country", "flight_phase",
+                           "anomaly_type", "anomaly_score", "delay_minutes",
+                           "risk_level"]].head(20),
                 use_container_width=True, hide_index=True,
             )
         else:
@@ -749,6 +862,7 @@ elif page == "🔮 Prediction Panel":
                     delay_minutes=row["delay_minutes"],
                     risk_level=str(row["risk_level"]),
                     recommended_action=row["recommended_action"],
+                    flight_phase=row["flight_phase"],
                 )
 
                 with st.spinner("Running AI pipeline... Multi-Agent → Neuro-Symbolic → Constitutional AI"):
@@ -811,23 +925,117 @@ elif page == "🔮 Prediction Panel":
                 else:
                     st.warning(result.final_action)
 
-                # --- Operator Feedback ---
+                # --- Operator Feedback (persisted via anomaly_tracker) ---
                 st.divider()
                 st.markdown("### 👤 Operator Feedback Loop")
-                st.caption("Your feedback improves the AI models via federated learning (Feature 008)")
+                st.caption("Your feedback is persisted and used to adapt anomaly thresholds (closed-loop learning)")
+
+                from dashboard.anomaly_tracker import log_anomaly, resolve_anomaly, acknowledge_anomaly
+
+                # Log the anomaly event
+                operator_name = st.session_state.get("username", "dispatcher")
+                event = log_anomaly(
+                    callsign=row["callsign"],
+                    origin_country=row["origin_country"],
+                    anomaly_type=row["anomaly_type"],
+                    anomaly_score=float(row["anomaly_score"]),
+                    flight_phase=row["flight_phase"],
+                    risk_level=str(row["risk_level"]),
+                    recommended_action=result.final_action,
+                    assigned_to=operator_name,
+                )
+                acknowledge_anomaly(event.event_id, operator_name)
+                st.caption(f"Event ID: `{event.event_id}` | Assigned to: **{operator_name}**")
+
                 fb_col1, fb_col2, fb_col3 = st.columns(3)
                 with fb_col1:
                     if st.button("✅ Accept Action", key="fb_accept"):
-                        st.success("Feedback recorded: Action ACCEPTED. Model will reinforce this pattern.")
+                        resolve_anomaly(event.event_id, "RESOLVED", "Operator accepted AI recommendation", "accept")
+                        st.success("Logged: RESOLVED. Thresholds reinforced for this pattern.")
                 with fb_col2:
-                    if st.button("❌ Reject Action", key="fb_reject"):
-                        st.warning("Feedback recorded: Action REJECTED. Model will adjust weights.")
+                    if st.button("❌ Reject / Escalate", key="fb_reject"):
+                        resolve_anomaly(event.event_id, "ESCALATED", "Operator rejected — needs manual review", "reject")
+                        st.warning("Logged: ESCALATED. Thresholds will tighten for this phase.")
                 with fb_col3:
                     if st.button("🔄 False Positive", key="fb_fp"):
-                        st.info("Feedback recorded: FALSE POSITIVE. Anomaly threshold will be refined.")
+                        resolve_anomaly(event.event_id, "FALSE_POSITIVE", "Operator marked as false positive", "false_positive")
+                        st.info("Logged: FALSE POSITIVE. Thresholds will widen to reduce noise.")
 
     with tab5:
-        display_cols = ["callsign", "origin_country", "delay_minutes",
+        from dashboard.anomaly_tracker import get_event_log, get_audit_stats, get_adaptive_thresholds
+
+        st.subheader("Anomaly Resolution Audit Trail")
+        st.caption("Every anomaly is tracked: DETECTED → ACKNOWLEDGED → RESOLVED / ESCALATED / FALSE_POSITIVE")
+
+        # Audit stats
+        stats = get_audit_stats()
+        sa1, sa2, sa3, sa4 = st.columns(4)
+        sa1.metric("Total Events Tracked", stats["total_events"])
+        sa2.metric("Avg Ack Time", f"{stats['avg_ack_time_sec']:.0f}s" if stats["avg_ack_time_sec"] else "—")
+        sa3.metric("False Positive Rate", f"{stats['fp_rate']:.1f}%")
+        sa4.metric("Resolution Rate", f"{stats['resolution_rate']:.1f}%")
+
+        if stats["status_counts"]:
+            st.divider()
+            st.markdown("**Status Distribution:**")
+            status_df = pd.DataFrame([
+                {"Status": k, "Count": v} for k, v in stats["status_counts"].items()
+            ])
+            fig_status = px.pie(
+                status_df, values="Count", names="Status",
+                title="Anomaly Resolution Status",
+                color_discrete_sequence=["#3498db", "#f39c12", "#2ecc71", "#e74c3c", "#9b59b6", "#1abc9c"],
+                template="plotly_dark",
+            )
+            fig_status.update_layout(height=300)
+            st.plotly_chart(fig_status, use_container_width=True)
+
+        # Event log table
+        st.divider()
+        st.subheader("Recent Event Log")
+        event_log = get_event_log(limit=30)
+        if event_log:
+            log_df = pd.DataFrame(event_log)
+            display = ["event_id", "callsign", "flight_phase", "anomaly_type",
+                        "status", "assigned_to", "detected_at", "feedback"]
+            show_cols = [c for c in display if c in log_df.columns]
+            st.dataframe(log_df[show_cols], use_container_width=True, hide_index=True)
+        else:
+            st.info("No events tracked yet. Run the AI Analysis Pipeline and provide feedback to start building the audit trail.")
+
+        # Adaptive thresholds
+        st.divider()
+        st.subheader("🔄 Adaptive Threshold Learning")
+        st.caption("Thresholds auto-adjust based on operator feedback — the system learns to reduce false positives")
+
+        adaptive = get_adaptive_thresholds()
+        if adaptive:
+            for phase, data in adaptive.items():
+                sens = data.get("alt_sensitivity", 0)
+                direction = "widened" if sens > 0 else "tightened" if sens < 0 else "unchanged"
+                fp = data.get("fp_rate", 0)
+                total = data.get("total_feedback", 0)
+
+                if sens > 0:
+                    st.success(
+                        f"**{phase}** — Thresholds {direction} by {abs(sens)*100:.0f}% "
+                        f"(FP rate: {fp:.0f}%, from {total} feedback events). Fewer false alarms."
+                    )
+                elif sens < 0:
+                    st.warning(
+                        f"**{phase}** — Thresholds {direction} by {abs(sens)*100:.0f}% "
+                        f"(Reject rate: {data.get('reject_rate', 0):.0f}%, from {total} events). Catching more anomalies."
+                    )
+                else:
+                    st.info(f"**{phase}** — Thresholds unchanged ({total} feedback events). System calibrated.")
+        else:
+            st.info(
+                "No adaptive adjustments yet. As operators provide feedback (Accept/Reject/False Positive), "
+                "thresholds will automatically adjust per flight phase to reduce noise and catch real threats."
+            )
+
+    with tab6:
+        display_cols = ["callsign", "origin_country", "flight_phase", "delay_minutes",
                         "delay_confidence", "anomaly_score", "anomaly_type",
                         "risk_level", "recommended_action"]
         st.dataframe(
