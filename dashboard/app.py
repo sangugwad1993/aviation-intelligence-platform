@@ -399,6 +399,11 @@ def generate_predictions(df: pd.DataFrame) -> pd.DataFrame:
 
     preds["recommended_action"] = preds.apply(_action, axis=1)
 
+    # Store raw telemetry for domain agents
+    preds["altitude"] = alt.values
+    preds["velocity"] = vel.values
+    preds["vertical_rate"] = vr.values
+
     return preds
 
 
@@ -824,17 +829,24 @@ elif page == "🔮 Prediction Panel":
 
         st.subheader("End-to-End AI Analysis Pipeline")
         st.caption(
-            "Multi-Agent System → Neuro-Symbolic Reasoning → Constitutional AI Safety Gate"
+            "8 Specialist Agents → Neuro-Symbolic Reasoning → Constitutional AI Safety Gate"
         )
 
         # Pipeline overview
         st.markdown(
             "```\n"
-            "Live Anomaly ──▶ 🤖 Multi-Agent Analysis ──▶ 🧠 Neuro-Symbolic Rules ──▶ 🛡️ Constitutional AI ──▶ ✅ Approved Action\n"
-            "                 DataAnalyst                  ICAO/FAA Rule Check          Safety Constitution\n"
-            "                 CausalReasoner               Knowledge Graph              Self-Critique Loop\n"
-            "                 Predictor                    Regulatory Compliance        Human-in-Loop Gate\n"
-            "                 SafetyCritic\n"
+            "Live Anomaly ──▶ 🤖 8-Agent Analysis ──────────▶ 🧠 Neuro-Symbolic ──▶ 🛡️ Constitutional AI ──▶ ✅ Action\n"
+            "                 ┌─ Core ───────────────┐        ICAO/FAA Rules         Safety Constitution\n"
+            "                 │ DataAnalyst           │        Knowledge Graph        Self-Critique Loop\n"
+            "                 │ CausalReasoner        │        Regulatory Check       Human-in-Loop Gate\n"
+            "                 │ Predictor             │\n"
+            "                 │ SafetyCritic          │\n"
+            "                 ├─ Domain Specialists ──┤\n"
+            "                 │ WeatherCorrelator     │\n"
+            "                 │ MaintenancePredictor  │\n"
+            "                 │ CrewImpactAnalyser    │\n"
+            "                 │ RouteOptimizer        │\n"
+            "                 └──────────────────────┘\n"
             "```"
         )
         st.divider()
@@ -858,11 +870,14 @@ elif page == "🔮 Prediction Panel":
                     callsign=row["callsign"],
                     origin_country=row["origin_country"],
                     anomaly_type=row["anomaly_type"],
-                    anomaly_score=row["anomaly_score"],
-                    delay_minutes=row["delay_minutes"],
+                    anomaly_score=float(row["anomaly_score"]),
+                    delay_minutes=float(row["delay_minutes"]),
                     risk_level=str(row["risk_level"]),
                     recommended_action=row["recommended_action"],
                     flight_phase=row["flight_phase"],
+                    altitude=float(row.get("altitude", 8000)),
+                    velocity=float(row.get("velocity", 200)),
+                    vertical_rate=float(row.get("vertical_rate", 0)),
                 )
 
                 with st.spinner("Running AI pipeline... Multi-Agent → Neuro-Symbolic → Constitutional AI"):
@@ -872,9 +887,16 @@ elif page == "🔮 Prediction Panel":
                            f"Confidence: {result.pipeline_confidence:.1%}")
                 st.divider()
 
-                # --- Stage 1: Multi-Agent ---
-                st.markdown("### 🤖 Stage 1: Multi-Agent Analysis")
-                for agent in result.agent_analyses:
+                # --- Stage 1: Multi-Agent (8 agents) ---
+                st.markdown("### 🤖 Stage 1: Multi-Agent Analysis (8 Agents)")
+
+                core_agents = [a for a in result.agent_analyses
+                               if a.agent_name in ("DataAnalyst", "CausalReasoner", "Predictor", "SafetyCritic")]
+                domain_agents = [a for a in result.agent_analyses
+                                 if a.agent_name in ("WeatherCorrelator", "MaintenancePredictor", "CrewImpactAnalyser", "RouteOptimizer")]
+
+                st.markdown("#### Core Analysis Agents")
+                for agent in core_agents:
                     with st.expander(f"**{agent.agent_name}** — {agent.role} (conf: {agent.confidence:.0%})", expanded=True):
                         st.markdown(agent.finding)
                         if agent.details:
@@ -882,6 +904,16 @@ elif page == "🔮 Prediction Panel":
 
                 st.markdown(f"**Root Cause:** {result.root_cause}")
                 st.markdown(f"**Cascading Impact:** {result.cascading_impact}")
+
+                if domain_agents:
+                    st.markdown("#### Domain Specialist Agents")
+                    for agent in domain_agents:
+                        icon = {"WeatherCorrelator": "🌦️", "MaintenancePredictor": "🔧",
+                                "CrewImpactAnalyser": "👨‍✈️", "RouteOptimizer": "🗺️"}.get(agent.agent_name, "🔹")
+                        with st.expander(f"{icon} **{agent.agent_name}** — {agent.role} (conf: {agent.confidence:.0%})", expanded=True):
+                            st.markdown(agent.finding)
+                            if agent.details:
+                                st.json(agent.details)
                 st.divider()
 
                 # --- Stage 2: Neuro-Symbolic ---

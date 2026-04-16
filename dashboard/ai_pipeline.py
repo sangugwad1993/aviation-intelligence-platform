@@ -195,7 +195,341 @@ def _run_multi_agent_analysis(anomaly: AnomalyInput) -> tuple:
     root_cause = top_cause
     cascading_impact = impact
 
+    # --- WeatherCorrelator Agent ---
+    weather_finding, weather_conf, weather_details = _run_weather_correlator(anomaly)
+    analyses.append(AgentAnalysis(
+        agent_name="WeatherCorrelator",
+        role="Cross-reference anomaly with meteorological conditions",
+        finding=weather_finding,
+        confidence=weather_conf,
+        details=weather_details,
+    ))
+
+    # --- MaintenancePredictor Agent ---
+    maint_finding, maint_conf, maint_details = _run_maintenance_predictor(anomaly)
+    analyses.append(AgentAnalysis(
+        agent_name="MaintenancePredictor",
+        role="Predict maintenance needs from anomaly pattern",
+        finding=maint_finding,
+        confidence=maint_conf,
+        details=maint_details,
+    ))
+
+    # --- CrewImpactAnalyser Agent ---
+    crew_finding, crew_conf, crew_details = _run_crew_impact_analyser(anomaly)
+    analyses.append(AgentAnalysis(
+        agent_name="CrewImpactAnalyser",
+        role="Assess crew duty time impact and scheduling",
+        finding=crew_finding,
+        confidence=crew_conf,
+        details=crew_details,
+    ))
+
+    # --- RouteOptimizer Agent ---
+    route_finding, route_conf, route_details = _run_route_optimizer(anomaly)
+    analyses.append(AgentAnalysis(
+        agent_name="RouteOptimizer",
+        role="Suggest alternate routing or altitude optimization",
+        finding=route_finding,
+        confidence=route_conf,
+        details=route_details,
+    ))
+
     return analyses, root_cause, cascading_impact
+
+
+# ---------------------------------------------------------------------------
+# Domain Agent: WeatherCorrelator
+# ---------------------------------------------------------------------------
+# Simulated METAR-like weather conditions keyed by altitude band + anomaly type
+_WEATHER_CONDITIONS = {
+    "high_alt_turbulence": {
+        "condition": "CB tops FL380, moderate-to-severe turbulence reported",
+        "metar": "METAR: SCT040CB BKN250 +TSRA",
+        "sigmet": "SIGMET CHARLIE 3 — SEV TURB FL300-FL400",
+        "correlation": 0.85,
+    },
+    "low_alt_wind": {
+        "condition": "Surface wind gusting 35kt, low-level wind shear reported",
+        "metar": "METAR: 27015G35KT 3SM -RA BR",
+        "sigmet": "AIRMET TANGO — LLWS below 2000ft AGL",
+        "correlation": 0.78,
+    },
+    "icing": {
+        "condition": "Moderate icing in clouds FL100-FL200, freezing rain",
+        "metar": "METAR: OVC015 -FZRA FG",
+        "sigmet": "AIRMET ZULU — MOD ICE FL100-FL200",
+        "correlation": 0.72,
+    },
+    "clear": {
+        "condition": "CAVOK — no significant weather",
+        "metar": "METAR: 18005KT CAVOK",
+        "sigmet": "No SIGMET active",
+        "correlation": 0.15,
+    },
+}
+
+
+def _run_weather_correlator(anomaly: AnomalyInput) -> tuple:
+    """Data-aware weather correlation based on altitude, phase, and anomaly type."""
+    alt = anomaly.altitude
+    phase = anomaly.flight_phase
+    atype = anomaly.anomaly_type
+
+    # Select weather condition based on actual telemetry
+    if alt > 8000 and ("Altitude" in atype or "Vertical Rate" in atype):
+        wx = _WEATHER_CONDITIONS["high_alt_turbulence"]
+        assessment = (f"High-altitude anomaly at {alt:.0f}m during {phase} correlates with "
+                      f"convective activity. {wx['condition']}. "
+                      f"**Recommendation:** Request ride report from crew via ACARS. "
+                      f"Consider FL change if turbulence persists > 5 min.")
+    elif alt < 3000 and ("Speed" in atype or "Ground Proximity" in atype):
+        wx = _WEATHER_CONDITIONS["low_alt_wind"]
+        assessment = (f"Low-altitude anomaly at {alt:.0f}m during {phase} correlates with "
+                      f"surface wind conditions. {wx['condition']}. "
+                      f"**Recommendation:** Monitor wind shear alerts. "
+                      f"{'Prepare for possible go-around.' if phase in ('Approach', 'Landing') else 'No immediate action.'}")
+    elif 3000 <= alt <= 8000 and "Speed" in atype:
+        wx = _WEATHER_CONDITIONS["icing"]
+        assessment = (f"Mid-altitude speed anomaly at {alt:.0f}m — possible icing encounter. "
+                      f"{wx['condition']}. "
+                      f"**Recommendation:** Verify anti-ice systems active. "
+                      f"Request altitude change if icing PIREPs confirmed.")
+    else:
+        wx = _WEATHER_CONDITIONS["clear"]
+        assessment = (f"No significant weather correlation for this anomaly pattern "
+                      f"(alt: {alt:.0f}m, phase: {phase}). {wx['condition']}. "
+                      f"Weather is not a contributing factor — investigate other causes.")
+
+    return assessment, wx["correlation"], {
+        "metar": wx["metar"],
+        "sigmet": wx["sigmet"],
+        "weather_correlation": wx["correlation"],
+        "altitude_band": f"{alt:.0f}m",
+    }
+
+
+# ---------------------------------------------------------------------------
+# Domain Agent: MaintenancePredictor
+# ---------------------------------------------------------------------------
+_MAINT_PATTERNS = {
+    "engine": {
+        "system": "Engine / Powerplant",
+        "ata_chapter": "ATA 72 — Engine",
+        "action": "Schedule borescope inspection within next 50 flight hours",
+        "urgency": "HIGH",
+    },
+    "pressurization": {
+        "system": "Pressurization / ECS",
+        "ata_chapter": "ATA 21 — Air Conditioning",
+        "action": "Check cabin pressure controller and outflow valve",
+        "urgency": "MEDIUM",
+    },
+    "flight_control": {
+        "system": "Flight Control Surfaces",
+        "ata_chapter": "ATA 27 — Flight Controls",
+        "action": "Inspect actuators and control surface rigging",
+        "urgency": "HIGH",
+    },
+    "navigation": {
+        "system": "Navigation / EGPWS",
+        "ata_chapter": "ATA 34 — Navigation",
+        "action": "Verify terrain database currency and GPS accuracy",
+        "urgency": "MEDIUM",
+    },
+    "none": {
+        "system": "No system flagged",
+        "ata_chapter": "N/A",
+        "action": "No maintenance action required at this time",
+        "urgency": "LOW",
+    },
+}
+
+
+def _run_maintenance_predictor(anomaly: AnomalyInput) -> tuple:
+    """Data-aware maintenance prediction from anomaly patterns."""
+    atype = anomaly.anomaly_type
+    score = anomaly.anomaly_score
+    phase = anomaly.flight_phase
+
+    # Pattern matching: which system is likely degraded?
+    if "Speed" in atype and score > 0.3 and phase == "Cruise":
+        pattern = _MAINT_PATTERNS["engine"]
+        conf = 0.73
+        finding = (f"Speed anomaly during cruise (score {score:.2f}) matches engine "
+                   f"performance degradation signature. **{pattern['system']}** flagged. "
+                   f"{pattern['ata_chapter']}. "
+                   f"Action: {pattern['action']}. Urgency: {pattern['urgency']}.")
+    elif "Altitude" in atype and score > 0.25 and phase == "Cruise":
+        pattern = _MAINT_PATTERNS["pressurization"]
+        conf = 0.65
+        finding = (f"Altitude deviation in cruise may indicate pressurization drift. "
+                   f"**{pattern['system']}** flagged. {pattern['ata_chapter']}. "
+                   f"Action: {pattern['action']}. Urgency: {pattern['urgency']}.")
+    elif "Vertical Rate" in atype and score > 0.3:
+        pattern = _MAINT_PATTERNS["flight_control"]
+        conf = 0.68
+        finding = (f"Abnormal vertical rate (score {score:.2f}) may indicate flight control "
+                   f"surface anomaly. **{pattern['system']}** flagged. {pattern['ata_chapter']}. "
+                   f"Action: {pattern['action']}. Urgency: {pattern['urgency']}.")
+    elif "Ground Proximity" in atype:
+        pattern = _MAINT_PATTERNS["navigation"]
+        conf = 0.60
+        finding = (f"Ground proximity alert — verify EGPWS terrain database is current. "
+                   f"**{pattern['system']}** flagged. {pattern['ata_chapter']}. "
+                   f"Action: {pattern['action']}. Urgency: {pattern['urgency']}.")
+    else:
+        pattern = _MAINT_PATTERNS["none"]
+        conf = 0.90
+        finding = (f"Anomaly pattern does not match known maintenance degradation signatures. "
+                   f"{pattern['action']}. Continue normal monitoring.")
+
+    return finding, conf, {
+        "system": pattern["system"],
+        "ata_chapter": pattern["ata_chapter"],
+        "urgency": pattern["urgency"],
+        "maintenance_action": pattern["action"],
+    }
+
+
+# ---------------------------------------------------------------------------
+# Domain Agent: CrewImpactAnalyser
+# ---------------------------------------------------------------------------
+def _run_crew_impact_analyser(anomaly: AnomalyInput) -> tuple:
+    """Data-aware crew duty time and scheduling impact assessment."""
+    delay = anomaly.delay_minutes
+    risk = anomaly.risk_level
+    phase = anomaly.flight_phase
+
+    # FAR 117 duty time limits: 9-14 hrs depending on start time
+    # Simulate remaining duty time based on delay
+    base_remaining_duty = 120  # 2 hrs nominal remaining
+    effective_remaining = max(0, base_remaining_duty - delay)
+
+    if delay > 60 and risk in ("High", "Critical"):
+        conf = 0.88
+        finding = (f"**CREW DUTY ALERT:** {delay:.0f} min delay puts crew at risk of exceeding "
+                   f"FAR 117 duty limits. Estimated remaining duty time: {effective_remaining:.0f} min. "
+                   f"**Action:** Contact crew scheduling. Prepare standby crew at destination. "
+                   f"If delay exceeds {base_remaining_duty:.0f} min, mandatory crew swap required. "
+                   f"Estimated cost of crew swap: $4,500–$8,000.")
+        details = {
+            "remaining_duty_min": effective_remaining,
+            "crew_swap_needed": True,
+            "estimated_cost_usd": "$4,500–$8,000",
+            "far_117_risk": "HIGH",
+            "standby_crew_needed": True,
+        }
+    elif delay > 30:
+        conf = 0.82
+        finding = (f"Moderate delay ({delay:.0f} min) — crew duty time should be monitored. "
+                   f"Remaining duty estimate: {effective_remaining:.0f} min. "
+                   f"**Action:** Notify crew scheduling of potential delay. "
+                   f"No immediate swap needed but monitor if delay extends. "
+                   f"Check connecting crew assignments for cascading impact.")
+        details = {
+            "remaining_duty_min": effective_remaining,
+            "crew_swap_needed": False,
+            "far_117_risk": "MEDIUM",
+            "standby_crew_needed": False,
+        }
+    elif delay > 10:
+        conf = 0.85
+        finding = (f"Minor delay ({delay:.0f} min) — no crew duty impact expected. "
+                   f"Remaining duty time: {effective_remaining:.0f} min (well within limits). "
+                   f"No crew scheduling action required.")
+        details = {
+            "remaining_duty_min": effective_remaining,
+            "crew_swap_needed": False,
+            "far_117_risk": "LOW",
+        }
+    else:
+        conf = 0.92
+        finding = (f"Negligible delay ({delay:.0f} min) during {phase} phase. "
+                   f"No impact on crew duty time or scheduling. Normal operations.")
+        details = {
+            "remaining_duty_min": effective_remaining,
+            "crew_swap_needed": False,
+            "far_117_risk": "NONE",
+        }
+
+    return finding, conf, details
+
+
+# ---------------------------------------------------------------------------
+# Domain Agent: RouteOptimizer
+# ---------------------------------------------------------------------------
+def _run_route_optimizer(anomaly: AnomalyInput) -> tuple:
+    """Data-aware route and altitude optimization suggestions."""
+    alt = anomaly.altitude
+    vel = anomaly.velocity
+    phase = anomaly.flight_phase
+    atype = anomaly.anomaly_type
+    delay = anomaly.delay_minutes
+
+    if phase == "Cruise" and "Altitude" in atype and alt > 6000:
+        # Suggest altitude change
+        new_alt = alt + 600 if alt < 11000 else alt - 600
+        fuel_save = round(abs(new_alt - alt) * 0.003, 1)  # kg/m simplified
+        conf = 0.80
+        finding = (f"**Altitude optimization available.** Current: {alt:.0f}m → "
+                   f"Suggested: {new_alt:.0f}m (±2000ft). "
+                   f"Estimated fuel saving: {fuel_save:.1f} kg. "
+                   f"Request FL change from ATC. Check ride reports for turbulence at new level. "
+                   f"Expected delay recovery: {min(delay * 0.3, 15):.0f} min.")
+        details = {
+            "current_altitude_m": alt,
+            "suggested_altitude_m": new_alt,
+            "fuel_saving_kg": fuel_save,
+            "delay_recovery_min": round(min(delay * 0.3, 15), 1),
+            "optimization_type": "altitude_change",
+        }
+    elif phase == "Cruise" and "Speed" in atype:
+        # Suggest speed adjustment (cost index)
+        optimal_vel = 230 if vel > 260 else 250
+        time_impact = round(abs(vel - optimal_vel) * 0.1, 1)
+        conf = 0.76
+        finding = (f"**Speed optimization available.** Current: {vel:.0f} m/s → "
+                   f"Optimal: {optimal_vel} m/s (cost index adjustment). "
+                   f"Time impact: ±{time_impact:.0f} min. "
+                   f"Fuel saving at optimal speed: ~{round(abs(vel - optimal_vel) * 2.5, 0):.0f} kg. "
+                   f"Request Mach adjustment from ATC if in RVSM airspace.")
+        details = {
+            "current_speed_ms": vel,
+            "suggested_speed_ms": optimal_vel,
+            "time_impact_min": time_impact,
+            "fuel_saving_kg": round(abs(vel - optimal_vel) * 2.5, 0),
+            "optimization_type": "speed_adjustment",
+        }
+    elif "Ground Proximity" in atype:
+        conf = 0.91
+        finding = (f"**Immediate routing action required.** Ground proximity during {phase}. "
+                   f"If terrain conflict: execute EGPWS escape maneuver (wings level, max thrust, "
+                   f"pitch 15° nose up). If false alarm: verify terrain database, "
+                   f"continue current approach if visual contact with runway.")
+        details = {
+            "optimization_type": "terrain_avoidance",
+            "immediate_action": True,
+        }
+    elif phase in ("Approach", "Landing"):
+        conf = 0.85
+        finding = (f"Aircraft in {phase} phase — route optimization not applicable. "
+                   f"Current approach path should be maintained. "
+                   f"If delay > 20 min, consider requesting priority sequencing from ATC. "
+                   f"{'Holding pattern fuel check recommended.' if delay > 30 else 'No fuel concern.'}")
+        details = {
+            "optimization_type": "none_approach_phase",
+            "priority_sequencing": delay > 20,
+        }
+    else:
+        conf = 0.88
+        finding = (f"Current routing is optimal for {phase} phase at {alt:.0f}m / {vel:.0f} m/s. "
+                   f"No alternate route or altitude change recommended at this time.")
+        details = {
+            "optimization_type": "none_optimal",
+        }
+
+    return finding, conf, details
 
 
 # ---------------------------------------------------------------------------
